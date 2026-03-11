@@ -62,7 +62,7 @@ User Preference Query ──► Embedding Model ──► FAISS Index ──► 
 ### Installation
 
 ```bash
-git clone https://github.com/<your-repo>/KRR-Zero-Shot-Alignment-via-Retrieval.git
+git clone [https://github.com/<your-repo>/KRR-Zero-Shot-Alignment-via-Retrieval.git](https://github.com/sumonesphantom/KRR-Zero-Shot-Alignment-via-Retrieval.git)
 cd KRR-Zero-Shot-Alignment-via-Retrieval
 pip install -r requirements.txt
 ```
