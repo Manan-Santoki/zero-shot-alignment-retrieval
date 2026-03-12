@@ -265,14 +265,76 @@ MAX_NEW_TOKENS = 256
 
 To use a larger base model (e.g., Llama 3.1 8B, Mistral 7B), change `BASE_MODEL_NAME` and ensure you have sufficient VRAM/RAM.
 
-## Expected Results
+## Preliminary Results
 
-After running the full pipeline, results are saved to `results/evaluation_results.json` containing:
+Results from our initial evaluation run using TinyLlama 1.1B as the base model, with 10 trained LoRA adapters evaluated across 20 test prompts.
 
-- Retrieval accuracy metrics
-- Per-example style adherence scores for all three conditions
-- Pairwise win rates
-- Generated outputs for qualitative inspection
+### Retrieval Accuracy
+
+| Metric | Score |
+|--------|-------|
+| Top-1 Accuracy | 0.75 |
+| Top-3 Accuracy | 0.90 |
+
+The retrieval component performs well: in 75% of cases the correct style is ranked first, and in 90% of cases it appears within the top 3. This validates the sentence-embedding + FAISS approach for mapping free-form user preferences to discrete style categories.
+
+### Style Adherence
+
+Mean heuristic-based style adherence scores across all 20 test prompts:
+
+| Condition | Mean Score |
+|-----------|-----------|
+| Base model (no adapter) | 0.328 |
+| Retrieved adapter | 0.345 |
+| Random adapter | 0.336 |
+
+The retrieved adapter shows a marginal improvement over both baselines. The small delta suggests that while the adapters do shift model behavior, the effect is limited — likely due to the constrained capacity of TinyLlama 1.1B and the small training set size (20 examples per style).
+
+### Pairwise Win Rates
+
+Win counts out of 20 evaluation pairs:
+
+| Comparison | Wins |
+|------------|------|
+| Retrieved vs Base | 4/20 |
+| Retrieved vs Random | 4/20 |
+| Random vs Base | 3/20 |
+
+#### Per-Style Breakdown
+
+| Style | Retrieved vs Base | Retrieved vs Random |
+|-------|:-----------------:|:-------------------:|
+| casual_friendly | 2/2 | 1/2 |
+| professional_business | 1/2 | 1/2 |
+| debate_critical | 1/2 | 1/2 |
+| formal_academic | 0/2 | 0/2 |
+| concise_bullet | 0/2 | 0/2 |
+| eli5_simple | 0/2 | 0/2 |
+| technical_precise | 0/2 | 1/2 |
+| socratic_teaching | 0/2 | 0/2 |
+| storytelling_narrative | 0/2 | 0/2 |
+| empathetic_supportive | 0/2 | 0/2 |
+
+### Analysis
+
+Several observations from this initial evaluation:
+
+1. **Retrieval works, adaptation is the bottleneck.** The FAISS-based retrieval achieves strong accuracy (75%/90%), but the downstream style transfer effect is weak. This is consistent with prior work showing that small base models have limited capacity to express stylistic variation through LoRA alone.
+
+2. **Style-dependent performance.** Styles with more surface-level lexical markers (e.g., `casual_friendly` with contractions, `professional_business` with structured formatting) show clearer wins. Styles requiring deeper structural changes (e.g., `socratic_teaching` requiring question generation, `storytelling_narrative` requiring narrative framing) show no measurable improvement, likely because TinyLlama lacks the capacity for these transformations.
+
+3. **Heuristic scoring limitations.** The current evaluation relies on keyword-based heuristics (e.g., checking for bullet points, question marks, formal vocabulary). These proxies are coarse — for instance, `formal_words` scores 0.0 across all conditions because the heuristic looks for a narrow set of academic terms. A more robust evaluation (e.g., LLM-as-judge with a larger model) would better capture stylistic nuance.
+
+4. **Generation quality issues.** Some outputs exhibit degenerate behavior (e.g., repeating tokens), suggesting that generation hyperparameters or adapter training may need further tuning.
+
+### Next Steps
+
+- Scale to a larger base model (e.g., Llama 3.1 8B or Mistral 7B) to test whether increased model capacity improves style transfer
+- Expand training data beyond 20 examples per style
+- Implement LLM-as-judge evaluation with a stronger evaluator model
+- Explore weighted adapter composition for blended styles
+
+Raw evaluation data is saved to `results/evaluation_results.json`.
 
 ## Design Decisions
 

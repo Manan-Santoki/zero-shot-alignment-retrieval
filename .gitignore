@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Trained LoRA adapters (too large for git, ~1.8 GB total)
+style_bank/adapters/
+
+# FAISS index and cache files
+data/style_index.faiss
+data/id_map.json
+data/style_cards_cache.json
+
+# Local TODO
+TODO.md
+
+# macOS
+.DS_Store
