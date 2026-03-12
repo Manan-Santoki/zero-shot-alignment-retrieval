@@ -1,16 +1,20 @@
 # Zero-Shot Alignment via Retrieval
 
-Align LLM outputs to user preferences by **retrieving pre-trained style modules (LoRA adapters)** at inference time, instead of fine-tuning per user. Given a natural language preference description (e.g., "be formal and academic"), the system retrieves the best-matching style adapter from a bank of pre-trained modules and composes it onto a base LLM to generate preference-aligned responses.
+Align LLM outputs to user preferences by retrieving pre-trained style modules (LoRA adapters) at inference time, instead of fine-tuning per user. Given a natural language preference description (e.g., "be formal and academic"), the system retrieves the best-matching style adapter from a bank of pre-trained modules and composes it onto a base LLM to generate preference-aligned responses.
 
-## Core Idea
+## Why not just fine-tune? And if it's "zero-shot," why is there a training step?
 
-Traditional alignment requires fine-tuning a model for each user's preferences — expensive and not scalable. This project takes a different approach:
+The term "zero-shot" here refers to what happens at inference time from the user's perspective. A new user shows up, describes what they want in plain English, and gets a styled response immediately. No fine-tuning, no data collection, no waiting. That part is zero-shot.
 
-1. **Pre-train** a bank of LoRA adapters, each capturing a distinct communication style
-2. **Retrieve** the best adapter at inference time using embedding similarity over style descriptions
-3. **Compose** the adapter onto the base model and generate
+But the adapter bank itself has to exist first. We train a set of LoRA adapters offline, once, each one capturing a different writing style. Think of it like stocking a library: you write the books ahead of time so that readers can just walk in and pick one off the shelf. The training is a one-time cost to build the shelf. The retrieval is what makes it zero-shot for every user after that.
 
-No per-user training is needed. The user simply describes what they want, and the system finds and applies the right style module.
+This matters because the alternative (fine-tuning a model per user) is expensive, slow, and doesn't scale. With retrieval, adding a new style just means training one more adapter and dropping it into the bank. Existing users aren't affected and no retraining of the full model is needed.
+
+| Step | What happens | Runs when |
+|---|---|---|
+| Adapter training | Train 10 LoRA modules on curated style datasets | Once, offline |
+| Index building | Embed style descriptions into FAISS index | Once, offline |
+| Retrieval + generation | User query → nearest style → compose adapter → generate | Every request, zero-shot |
 
 ## Architecture
 
@@ -44,10 +48,12 @@ User Preference Query ──► Embedding Model ──► FAISS Index ──► 
 │   ├── config.py                # Shared configuration (model, paths, hyperparameters)
 │   ├── build_index.py           # Builds FAISS index from style cards
 │   ├── retrieve.py              # Retrieves top-k styles via embedding similarity
-│   ├── train_adapters.py        # Trains LoRA adapters using synthetic data
+│   ├── train_adapters.py        # Trains LoRA adapters for each style
 │   ├── generate.py              # Generates responses with retrieved adapters
 │   └── evaluate.py              # Evaluation: retrieval accuracy, style adherence, win rates
-├── data/                        # FAISS index and metadata (created during indexing)
+├── data/
+│   ├── training/                # Curated JSONL datasets (20 examples per style)
+│   └── ...                      # FAISS index and metadata (created during indexing)
 └── results/                     # Evaluation results (created during evaluation)
 ```
 
@@ -122,7 +128,7 @@ Imagine your phone is sending invisible letters through the air...
 
 ### 1. Style Representation (Style Cards)
 
-Each style is defined as a **Style Card** in `style_bank/style_cards.jsonl`:
+Each style is defined as a Style Card in `style_bank/style_cards.jsonl`:
 
 ```json
 {
@@ -139,7 +145,7 @@ Each style is defined as a **Style Card** in `style_bank/style_cards.jsonl`:
 }
 ```
 
-The 10 styles defined:
+The 10 styles:
 
 | Style | Tags | Description |
 |---|---|---|
@@ -154,7 +160,13 @@ The 10 styles defined:
 | `empathetic_supportive` | empathetic, encouraging, patient | Warm, validating, gentle explanations |
 | `debate_critical` | critical, analytical, balanced | Multiple perspectives, pros and cons |
 
-### 2. Style Embedding and Retrieval
+### 2. Training Data
+
+Each style has a curated JSONL dataset in `data/training/` with ~20 prompt-response pairs. The prompts include an explicit style tag (e.g., `Style: Formal Academic`) to anchor the LoRA to the right behavior and prevent style bleed. Topics are diverse — science, economics, technology, everyday tasks — so the adapter learns the style itself rather than memorizing subject-specific patterns.
+
+The training code loads curated data first. If no curated file is found for a given style, it falls back to synthetic data generation using the base model.
+
+### 3. Style Embedding and Retrieval
 
 **Indexing** (`src/build_index.py`):
 - Builds a text representation for each style card by combining its instruction, tags, and example Q&A pairs
@@ -172,11 +184,11 @@ results = retriever.retrieve("I want formal academic explanations", top_k=3)
 # Returns: [(style_card, similarity_score, weight), ...]
 ```
 
-### 3. LoRA Adapter Training
+### 4. LoRA Adapter Training
 
 **Training** (`src/train_adapters.py`):
-- For each style, generates **synthetic training data** by prompting the base model with the style instruction across 30 diverse prompts
-- Trains a **LoRA adapter** (rank=16, alpha=32) on the `q_proj`, `v_proj`, `k_proj`, `o_proj` attention layers
+- Loads curated training data from `data/training/{style_id}.jsonl` (20 prompt-response pairs per style)
+- Trains a LoRA adapter (rank=16, alpha=32) on the `q_proj`, `v_proj`, `k_proj`, `o_proj` attention layers
 - Each adapter adds only ~4M trainable parameters vs 1.1B total — lightweight and composable
 
 **LoRA Configuration:**
@@ -189,7 +201,7 @@ results = retriever.retrieve("I want formal academic explanations", top_k=3)
 | Training Epochs | 3 |
 | Learning Rate | 2e-4 |
 
-### 4. Generation with Composed Adapters
+### 5. Generation with Composed Adapters
 
 **Generation** (`src/generate.py`):
 - Loads the base model (TinyLlama 1.1B Chat) once
@@ -197,25 +209,25 @@ results = retriever.retrieve("I want formal academic explanations", top_k=3)
 - Generates with the composed model (base + adapter)
 - Supports comparison mode: generates base, retrieved-style, and random-style outputs for the same prompt
 
-### 5. Evaluation
+### 6. Evaluation
 
 **Evaluation** (`src/evaluate.py`) measures three things:
 
 #### a) Retrieval Accuracy
 - Tests whether the retriever returns the correct style for 20 diverse preference queries
-- Reports **top-1 accuracy** (exact match) and **top-3 accuracy** (correct style in top 3)
+- Reports top-1 accuracy (exact match) and top-3 accuracy (correct style in top 3)
 
 #### b) Style Adherence Scoring
 Two scoring methods:
 
-- **Keyword heuristics**: Rule-based scoring per style (e.g., checking for bullet points in `concise_bullet`, question marks in `socratic_teaching`, formal vocabulary in `formal_academic`)
-- **LLM-as-judge** (optional): Uses the base model to rate style adherence on a 1-5 scale
+- Keyword heuristics: rule-based scoring per style (e.g., checking for bullet points in `concise_bullet`, question marks in `socratic_teaching`, formal vocabulary in `formal_academic`)
+- LLM-as-judge (optional): uses the base model to rate style adherence on a 1-5 scale
 
 #### c) Pairwise Win Rates
 Compares outputs across three conditions:
-- **Retrieved adapter** vs **base model** (no adapter)
-- **Retrieved adapter** vs **random adapter** (wrong style)
-- **Random adapter** vs **base model**
+- Retrieved adapter vs base model (no adapter)
+- Retrieved adapter vs random adapter (wrong style)
+- Random adapter vs base model
 
 The retrieved adapter should win against both the base model and a random adapter.
 
@@ -262,15 +274,19 @@ After running the full pipeline, results are saved to `results/evaluation_result
 - Pairwise win rates
 - Generated outputs for qualitative inspection
 
-## Key Design Decisions
+## Design Decisions
 
-1. **Why retrieval over fine-tuning?** Retrieval is zero-shot — no per-user training needed. Adding new styles only requires a new style card and adapter, not retraining the whole system.
+**Why retrieval instead of per-user fine-tuning?**
+Fine-tuning a model for every new user is expensive and doesn't scale. With retrieval, you build the adapter bank once and every new user gets instant style matching. Adding a new style means training one small adapter, not touching the base model.
 
-2. **Why LoRA?** LoRA adapters are small (~16 MB each vs 4 GB for the full model), fast to train, and can be swapped at inference time without reloading the base model.
+**Why LoRA?**
+LoRA adapters are small (~16 MB each vs 4 GB for the full model), fast to train, and can be swapped at inference time without reloading the base model. This makes the retrieval-and-compose pattern practical.
 
-3. **Why synthetic training data?** Generating style-specific training data from the base model itself ensures consistency and avoids the need for large curated datasets per style.
+**Why curated training data?**
+We use small, hand-written datasets (20 examples per style) rather than large scraped corpora. This gives direct control over what each style looks like and avoids noise. The datasets are small enough that training is fast but targeted enough that the adapters learn clear style differences.
 
-4. **Why FAISS?** FAISS provides sub-millisecond nearest-neighbor search, making retrieval negligible compared to generation time.
+**Why FAISS?**
+FAISS provides sub-millisecond nearest-neighbor search, making retrieval negligible compared to generation time.
 
 ## References
 
