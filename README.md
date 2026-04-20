@@ -357,9 +357,60 @@ To use a larger base model (e.g., Llama 3.1 8B, Mistral 7B), change `BASE_MODEL_
 
 ## Preliminary Results
 
-Results from our initial evaluation run using TinyLlama 1.1B as the base model, with 10 trained LoRA adapters evaluated across 20 test prompts.
+Two evaluation runs, same 20-prompt set, same heuristic scorer — the single-LLM baseline (`previous/`) and the 3-LLM pipeline (`judge/`).
 
-### Retrieval Accuracy
+### Headline comparison
+
+| Metric | Single-LLM baseline | 3-LLM (Knowledge / Style / Judge) |
+|---|---:|---:|
+| Backend | TinyLlama 1.1B + LoRA (HF + PEFT) | `gemma4:e4b` for all three roles via Ollama |
+| Wins vs base model | **4 / 20**  (20%) | **13 / 20**  (65%) |
+| Mean heuristic style score | 0.345 | **0.771** |
+| Mean content-preservation cosine (draft → styled) | — | **0.80** (threshold 0.70, all 20 items pass) |
+| Mean judge style score | — | 4.9 / 5 |
+| Mean revisions per request | — | 0.05 |
+
+The 3-LLM pipeline delivered a **~3.25× lift in pairwise wins** and a **~2.2× lift in mean heuristic score** over the TinyLlama baseline, with content preservation holding on every item. Raw reports: `results/evaluation_results.json` (baseline) and `results/evaluation_results_3llm.json` (3-LLM).
+
+### Per-item (3-LLM)
+
+```
+#   expected_style           retrieved_style          revs  judge  cos   3llm/base
+ 0  formal_academic          professional_business     0    5/5   0.85  0.50 / 0.50
+ 1  casual_friendly          casual_friendly           0    5/5   0.85  1.00 / 0.15
+ 2  concise_bullet           empathetic_supportive     0    5/5   0.82  0.75 / 0.75
+ 3  eli5_simple              eli5_simple               0    5/5   0.74  1.00 / 1.00
+ 4  technical_precise        technical_precise         0    5/5   0.88  0.83 / 0.67
+ 5  socratic_teaching        socratic_teaching         0    5/5   0.70  0.75 / 0.17
+ 6  storytelling_narrative   storytelling_narrative    0    5/5   0.75  0.75 / 0.75
+ 7  professional_business    professional_business     0    5/5   0.80  0.83 / 0.50
+ 8  empathetic_supportive    empathetic_supportive     0    4/5   0.80  0.50 / 0.25
+ 9  debate_critical          debate_critical           0    5/5   0.91  1.00 / 1.00
+10  formal_academic          formal_academic           0    5/5   0.92  0.67 / 0.50
+11  eli5_simple              eli5_simple               1    5/5   0.75  1.00 / 0.75
+12  concise_bullet           empathetic_supportive     0    5/5   0.76  0.75 / 0.75
+13  casual_friendly          casual_friendly           0    5/5   0.87  1.00 / 0.83
+14  technical_precise        concise_bullet            0    5/5   0.76  0.67 / 0.50
+15  storytelling_narrative   storytelling_narrative    0    5/5   0.70  1.00 / 0.50
+16  professional_business    professional_business     0    5/5   0.75  0.67 / 0.50
+17  socratic_teaching        empathetic_supportive     0    5/5   0.75  0.00 / 0.00
+18  debate_critical          debate_critical           0    4/5   0.87  1.00 / 0.15
+19  empathetic_supportive    empathetic_supportive     0    5/5   0.81  0.75 / 0.25
+```
+
+Full per-request traces (draft, every style attempt, every judge verdict) in `results/traces/trace_NN.json`.
+
+### Analysis
+
+**What clearly works.** Decoupling content from style gave the rewriter a clean input to work on — the mean content-preservation cosine of 0.80 is above the 0.70 drift threshold on every single item, so improvements didn't come from the model hallucinating a more "stylistic" answer. The largest per-item wins are on styles with distinctive surface markers: #1/#13 casual_friendly (1.00 vs 0.15 / 0.83), #5 socratic_teaching (0.75 vs 0.17), #18 debate_critical (1.00 vs 0.15), #19 empathetic_supportive (0.75 vs 0.25). These are the styles TinyLlama couldn't produce at all (0/2 on the baseline per-style breakdown below); the 3-LLM pipeline now handles them.
+
+**Caveat 1 — the judge is a rubber stamp.** Because Knowledge, Style, and Judge are all `gemma4:e4b`, the judge evaluates outputs produced by its own weights and hits classic self-preference bias (Zheng et al. 2023): it returned 5/5 on 18 of 20 items and 4/5 on the other two. `mean_revisions = 0.05` means the control loop effectively didn't fire. The architecture for the loop is in place, but its real value cannot be measured until the judge runs on a different model family (e.g. `mistral:7b-instruct`). Tracked in `TODO.md` Phase 4.
+
+**Caveat 2 — retrieval is now the ceiling.** 5 of 20 items retrieved the wrong style (Top-1 = 15/20 = 75%, unchanged from the baseline because retrieval uses the same MiniLM embedder): #0 (formal_academic → professional_business), #2/#12 (concise_bullet → empathetic_supportive), #14 (technical_precise → concise_bullet), #17 (socratic_teaching → empathetic_supportive). When retrieval misses, the heuristic scores the styled output against a style it never tried to produce, capping the ceiling. Most of the 7/20 non-wins are exactly these retrieval failures; fixing retrieval (keyword rerank, or having the Judge re-pick from top-3 when `style_score` is low) is the obvious next lever.
+
+### Baseline (single-LLM, TinyLlama 1.1B) — for reference
+
+#### Retrieval Accuracy (shared by both pipelines)
 
 | Metric | Score |
 |--------|-------|
@@ -368,7 +419,7 @@ Results from our initial evaluation run using TinyLlama 1.1B as the base model, 
 
 The retrieval component performs well: in 75% of cases the correct style is ranked first, and in 90% of cases it appears within the top 3. This validates the sentence-embedding + FAISS approach for mapping free-form user preferences to discrete style categories.
 
-### Style Adherence
+#### Style Adherence
 
 Mean heuristic-based style adherence scores across all 20 test prompts:
 
@@ -378,9 +429,9 @@ Mean heuristic-based style adherence scores across all 20 test prompts:
 | Retrieved adapter | 0.345 |
 | Random adapter | 0.336 |
 
-The retrieved adapter shows a marginal improvement over both baselines. The small delta suggests that while the adapters do shift model behavior, the effect is limited — likely due to the constrained capacity of TinyLlama 1.1B and the small training set size (20 examples per style).
+The retrieved adapter shows a marginal improvement over both baselines. The small delta suggests that while the adapters do shift model behavior, the effect is limited — likely due to the constrained capacity of TinyLlama 1.1B and the small training set size (20 examples per style). This weakness is what motivated the 3-LLM refactor above.
 
-### Pairwise Win Rates
+#### Pairwise Win Rates
 
 Win counts out of 20 evaluation pairs:
 
@@ -405,26 +456,25 @@ Win counts out of 20 evaluation pairs:
 | storytelling_narrative | 0/2 | 0/2 |
 | empathetic_supportive | 0/2 | 0/2 |
 
-### Analysis
+#### Baseline analysis
 
-Several observations from this initial evaluation:
-
-1. **Retrieval works, adaptation is the bottleneck.** The FAISS-based retrieval achieves strong accuracy (75%/90%), but the downstream style transfer effect is weak. This is consistent with prior work showing that small base models have limited capacity to express stylistic variation through LoRA alone.
-
-2. **Style-dependent performance.** Styles with more surface-level lexical markers (e.g., `casual_friendly` with contractions, `professional_business` with structured formatting) show clearer wins. Styles requiring deeper structural changes (e.g., `socratic_teaching` requiring question generation, `storytelling_narrative` requiring narrative framing) show no measurable improvement, likely because TinyLlama lacks the capacity for these transformations.
-
-3. **Heuristic scoring limitations.** The current evaluation relies on keyword-based heuristics (e.g., checking for bullet points, question marks, formal vocabulary). These proxies are coarse — for instance, `formal_words` scores 0.0 across all conditions because the heuristic looks for a narrow set of academic terms. A more robust evaluation (e.g., LLM-as-judge with a larger model) would better capture stylistic nuance.
-
-4. **Generation quality issues.** Some outputs exhibit degenerate behavior (e.g., repeating tokens), suggesting that generation hyperparameters or adapter training may need further tuning.
+1. **Retrieval works, adaptation is the bottleneck.** FAISS retrieval achieves 75%/90% Top-1/Top-3, but the downstream style transfer effect is weak — consistent with prior work showing that small base models have limited capacity to express stylistic variation through LoRA alone.
+2. **Style-dependent performance.** Surface-level styles (casual_friendly, professional_business) show clearer wins; styles requiring deeper structural changes (socratic_teaching, storytelling_narrative) show no measurable improvement.
+3. **Heuristic scoring limitations.** Keyword-based proxies are coarse; an LLM-as-judge with a larger evaluator would better capture stylistic nuance.
+4. **Generation quality issues.** Some outputs exhibit degenerate behavior (repeating tokens), pointing to generation-hyperparameter or adapter-training tuning.
 
 ### Next Steps
 
-- Scale to a larger base model (e.g., Llama 3.1 8B or Mistral 7B) to test whether increased model capacity improves style transfer
+- Swap the 3-LLM judge to a **different model family** (e.g. `mistral:7b-instruct`) to break self-preference bias and actually exercise the revision loop
+- Improve retrieval: keyword rerank, or Judge-in-the-loop re-selection from top-3 when `style_score` is low
+- Restore the LoRA-retrieval thesis on the Ollama base: retrain adapters on Llama 3.1 8B, convert to GGUF, flip `STYLE_MODE="lora"` (Phase 4b in `TODO.md`)
 - Expand training data beyond 20 examples per style
-- Implement LLM-as-judge evaluation with a stronger evaluator model
 - Explore weighted adapter composition for blended styles
 
-Raw evaluation data is saved to `results/evaluation_results.json`.
+Raw evaluation data:
+- `results/evaluation_results.json` — single-LLM baseline
+- `results/evaluation_results_3llm.json` — 3-LLM summary
+- `results/traces/trace_NN.json` — per-request traces with every style attempt and judge verdict
 
 ## Design Decisions
 

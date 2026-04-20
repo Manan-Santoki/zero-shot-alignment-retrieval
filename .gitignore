@@ -214,6 +214,11 @@ data/style_index.faiss
 data/id_map.json
 data/style_cards_cache.json
 
+# Evaluation outputs (generated on every run — keep the folder, not the artifacts)
+results/*.json
+results/traces/
+!results/.gitkeep
+
 # Local TODO
 TODO.md
 

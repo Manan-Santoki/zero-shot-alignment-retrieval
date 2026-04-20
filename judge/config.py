@@ -4,6 +4,7 @@ Inference runs through Ollama. Make sure the models below are pulled:
 
     ollama pull llama3.1:8b-instruct-q4_K_M
     ollama pull mistral:7b-instruct-q4_K_M
+    ollama pull gemma4:e4b
 
 The sentence-transformers embedder still runs locally for FAISS retrieval and
 for the judge's content-preservation cosine.
@@ -30,9 +31,9 @@ OLLAMA_HOST = "http://localhost:11434"
 # Knowledge and Style use Llama 3.1 8B — strong instruction following, good at
 # faithful rewriting. Judge uses Mistral 7B — different family from the
 # generator, which reduces self-preference bias (Zheng et al. 2023).
-KNOWLEDGE_MODEL = "llama3.1:8b-instruct-q4_K_M"
-STYLE_MODEL = "llama3.1:8b-instruct-q4_K_M"
-JUDGE_MODEL = "mistral:7b-instruct-q4_K_M"
+KNOWLEDGE_MODEL = "gemma4:e4b"
+STYLE_MODEL = "gemma4:e4b"
+JUDGE_MODEL = "gemma4:e4b"
 
 # Embedding model for FAISS retrieval + judge content cosine.
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
