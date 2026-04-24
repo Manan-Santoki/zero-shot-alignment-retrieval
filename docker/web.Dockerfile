@@ -2,7 +2,12 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY web/package.json web/pnpm-lock.yaml ./
+
+# pnpm-workspace.yaml MUST be present at install time so pnpm 10 honors
+# the onlyBuiltDependencies list. Without it, postinstall for packages like
+# unrs-resolver (Turbopack's native resolver) is silently skipped in CI, and
+# Turbopack then fails to resolve any @/ alias at `pnpm build` time.
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN corepack enable && corepack prepare pnpm@10 --activate \
  && pnpm install --frozen-lockfile
 
